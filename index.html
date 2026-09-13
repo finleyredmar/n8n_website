@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Task Capture</title>
+
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-family: Arial, sans-serif;
+            background: #111;
+            color: white;
+        }
+
+        .container {
+            width: 90%;
+            max-width: 500px;
+            text-align: center;
+        }
+
+        h1 {
+            margin-bottom: 10px;
+        }
+
+        .status {
+            color: #aaa;
+            margin-bottom: 35px;
+        }
+
+        #recordButton {
+            width: 160px;
+            height: 160px;
+            border-radius: 50%;
+            border: none;
+            background: #222;
+            color: white;
+            font-size: 50px;
+            cursor: pointer;
+            transition: 0.2s;
+        }
+
+        #recordButton:hover {
+            transform: scale(1.05);
+        }
+
+        #recordButton.recording {
+            background: #d32f2f;
+            animation: pulse 1.2s infinite;
+        }
+
+        @keyframes pulse {
+            0% {
+                box-shadow: 0 0 0 0 rgba(211, 47, 47, 0.6);
+            }
+
+            70% {
+                box-shadow: 0 0 0 25px rgba(211, 47, 47, 0);
+            }
+
+            100% {
+                box-shadow: 0 0 0 0 rgba(211, 47, 47, 0);
+            }
+        }
+
+        .result {
+            margin-top: 40px;
+            padding: 20px;
+            background: #1c1c1c;
+            border-radius: 12px;
+            text-align: left;
+            display: none;
+        }
+
+        .result h2 {
+            margin-top: 0;
+        }
+
+        .error {
+            color: #ff6b6b;
+        }
+
+        .success {
+            color: #6be58b;
+        }
+    </style>
+</head>
+
+<body>
+
+<div class="container">
+
+    <h1>AI Task Capture</h1>
+
+    <div class="status" id="status">
+        Click the microphone to start
+    </div>
+
+    <button id="recordButton">🎙️</button>
+
+    <div class="result" id="result">
+        <h2>Result</h2>
+        <div id="resultText"></div>
+    </div>
+
+</div>
+
+
+<script>
+
+    // ============================================
+    // PUT YOUR N8N WEBHOOK URL HERE
+    // ============================================
+
+    const N8N_WEBHOOK_URL = "YOUR_N8N_WEBHOOK_URL";
+
+
+    // ============================================
+    // VARIABLES
+    // ============================================
+
+    let mediaRecorder;
+    let audioChunks = [];
+    let stream;
+
+
+    const recordButton = document.getElementById("recordButton");
+    const status = document.getElementById("status");
+    const result = document.getElementById("result");
+    const resultText = document.getElementById("resultText");
+
+
+    // ============================================
+    // BUTTON
+    // ============================================
+
+    recordButton.addEventListener("click", async () => {
+
+        if (!mediaRecorder || mediaRecorder.state === "inactive") {
+            await startRecording();
+        } else {
+            stopRecording();
+        }
+
+    });
+
+
+    // ============================================
+    // START RECORDING
+    // ============================================
+
+    async function startRecording() {
+
+        try {
+
+            stream = await navigator.mediaDevices.getUserMedia({
+                audio: true
+            });
+
+            audioChunks = [];
+
+            mediaRecorder = new MediaRecorder(stream);
+
+            mediaRecorder.ondataavailable = event => {
+
+                if (event.data.size > 0) {
+                    audioChunks.push(event.data);
+                }
+
+            };
+
+
+            mediaRecorder.onstop = sendAudio;
+
+
+            mediaRecorder.start();
+
+
+            recordButton.classList.add("recording");
+            recordButton.textContent = "⏹️";
+
+            status.textContent = "Recording... click again when finished";
+
+
+        } catch (error) {
+
+            console.error(error);
+
+            status.textContent =
+                "Microphone permission was denied.";
+
+        }
+
+    }
+
+
+    // ============================================
+    // STOP RECORDING
+    // ============================================
+
+    function stopRecording() {
+
+        mediaRecorder.stop();
+
+        stream.getTracks().forEach(track => {
+            track.stop();
+        });
+
+        recordButton.classList.remove("recording");
+        recordButton.textContent = "🎙️";
+
+        status.textContent = "Sending audio to AI...";
+
+    }
+
+
+    // ============================================
+    // SEND AUDIO TO N8N
+    // ============================================
+
+    async function sendAudio() {
+
+        try {
+
+            const audioBlob = new Blob(
+                audioChunks,
+                { type: "audio/webm" }
+            );
+
+
+            const formData = new FormData();
+
+            formData.append(
+                "audio",
+                audioBlob,
+                "task-recording.webm"
+            );
+
+
+            const response = await fetch(
+                N8N_WEBHOOK_URL,
+                {
+                    method: "POST",
+                    body: formData
+                }
+            );
+
+
+            if (!response.ok) {
+                throw new Error(
+                    `HTTP error ${response.status}`
+                );
+            }
+
+
+            // Try to read the response from n8n
+            let data;
+
+            try {
+                data = await response.json();
+            } catch {
+                data = {
+                    message: "Audio successfully sent to n8n."
+                };
+            }
+
+
+            status.textContent = "Done!";
+
+            result.style.display = "block";
+
+            resultText.innerHTML =
+                `<div class="success">
+                    ${data.message || "Tasks processed successfully."}
+                </div>`;
+
+
+        } catch (error) {
+
+            console.error(error);
+
+            status.textContent =
+                "Something went wrong.";
+
+            result.style.display = "block";
+
+            resultText.innerHTML =
+                `<div class="error">
+                    Could not send audio to n8n.<br><br>
+                    ${error.message}
+                </div>`;
+
+        }
+
+    }
+
+</script>
+
+</body>
+</html>
